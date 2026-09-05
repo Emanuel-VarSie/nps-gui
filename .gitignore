@@ -1,0 +1,37 @@
+# Build artifacts
+build/
+dist/
+*.spec
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Large binaries (downloaded in CI)
+assets/nps-linux-x64
+assets/nps-windows-x64.exe
+assets/nps-macos-*
+assets/trove-*
+
+# AppImage build
+AppDir/
+appimagetool*
+*.AppImage
+
+# Logs
+*.log
