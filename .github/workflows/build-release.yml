@@ -106,6 +106,11 @@ jobs:
           mkdir -p assets
           curl -fL -o assets/nps-windows-x64.exe "https://github.com/dreulavelle/trove/releases/download/v1.0.1/nps-windows-x64.exe"
 
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pyinstaller pillow
+
       - name: Create placeholder icon (Windows .ico)
         run: |
           # Create a simple .ico file using Python
@@ -114,11 +119,6 @@ jobs:
           img = Image.new('RGBA', (256, 256), (0, 120, 215, 255))
           img.save('assets/icon.ico', format='ICO', sizes=[(16,16), (32,32), (48,48), (64,64), (128,128), (256,256)])
           "
-
-      - name: Install Python dependencies
-        run: |
-          pip install --upgrade pip
-          pip install pyinstaller pillow
 
       - name: Build with PyInstaller (Windows onefile)
         run: |
