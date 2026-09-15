@@ -30,7 +30,7 @@ jobs:
       - name: Download nps binary (Linux)
         run: |
           mkdir -p assets
-          curl -L -o assets/nps-linux-x64 "https://github.com/dreulavelle/trove/releases/download/v1.0.1/nps-linux-x64"
+          curl -fL -o assets/nps-linux-x64 "https://github.com/dreulavelle/trove/releases/download/v1.0.1/nps-linux-x64"
           chmod +x assets/nps-linux-x64
 
       - name: Create placeholder icon
@@ -54,6 +54,7 @@ jobs:
           mkdir -p AppDir/usr/share/applications
           mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
           cp dist/nps-gui AppDir/usr/bin/
+          cp assets/icon.png AppDir/nps-gui.png
           cp assets/icon.png AppDir/usr/share/icons/hicolor/256x256/apps/nps-gui.png
           cat > AppDir/AppRun << 'EOF'
           #!/bin/bash
@@ -101,8 +102,8 @@ jobs:
 
       - name: Download nps binary (Windows)
         run: |
-          mkdir assets
-          curl -L -o assets/nps-windows-x64.exe "https://github.com/dreulavelle/trove/releases/download/v1.0.1/nps-windows-x64.exe"
+          mkdir -p assets
+          curl -fL -o assets/nps-windows-x64.exe "https://github.com/dreulavelle/trove/releases/download/v1.0.1/nps-windows-x64.exe"
 
       - name: Create placeholder icon (Windows .ico)
         run: |
