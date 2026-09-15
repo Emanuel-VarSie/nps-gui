@@ -15,6 +15,9 @@ import signal
 import glob
 import sys
 import platform
+import json
+import urllib.request
+import urllib.parse
 from pathlib import Path
 from typing import List, Dict, Optional
 
@@ -64,6 +67,23 @@ def get_nps_binary() -> Path:
 NPS_BIN = get_nps_binary()
 DEFAULT_DEST = str(Path.home() / "Downloads" / "PS3_Games")
 
+# --- Tema oscuro ---
+COLORS = {
+    "bg": "#121212",
+    "panel": "#1e1e1e",
+    "fg": "#e0e0e0",
+    "muted": "#9e9e9e",
+    "accent": "#3574f0",
+    "accent2": "#2b5fcf",
+    "sel": "#252525",
+    "border": "#333333",
+}
+
+# --- SteamGridDB (fondo del juego al buscar) ---
+SGDB_BASE = "https://www.steamgriddb.com/api/v2"
+SGDB_KEY = os.environ.get("STEAMGRIDDB_API_KEY", "")
+SGDB_DEFAULT_TIMEOUT = 15
+
 
 class NPSGui:
     """Main GUI application class."""
@@ -81,11 +101,155 @@ class NPSGui:
         self.current_title_id: Optional[str] = None
         self.current_dest: Optional[str] = None
         self.child_pids = set()
+        self.bg_image = None          # PIL image actual de fondo
+        self.bg_photo = None          # PhotoImage para tk
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        self._apply_dark_theme()
         self._build_ui()
 
+    def _apply_dark_theme(self):
+        """Aplica el tema oscuro global."""
+        c = COLORS
+        style = ttk.Style(self.root)
+        available = set(style.theme_names())
+        if "clam" in available:
+            style.theme_use("clam")
+        style.configure(".", background=c["panel"], foreground=c["fg"],
+                        fieldbackground=c["panel"], bordercolor=c["border"])
+        style.configure("TFrame", background=c["panel"])
+        style.configure("TLabel", background=c["panel"], foreground=c["fg"])
+        style.configure("TButton", background=c["accent"], foreground="#ffffff",
+                        padding=6, borderwidth=0, focuscolor=c["accent"])
+        style.map("TButton",
+                  background=[("active", c["accent2"]), ("pressed", c["accent2"])],
+                  foreground=[("active", "#ffffff")])
+        style.configure("TEntry", fieldbackground=c["sel"], foreground=c["fg"],
+                        insertcolor=c["fg"], bordercolor=c["border"])
+        style.configure("TCombobox", fieldbackground=c["sel"], foreground=c["fg"],
+                        background=c["panel"], arrowcolor=c["fg"])
+        style.configure("TProgressbar", background=c["accent"], troughcolor=c["sel"],
+                        bordercolor=c["border"])
+        style.configure("Treeview", background=c["sel"], fieldbackground=c["sel"],
+                        foreground=c["fg"], bordercolor=c["border"])
+        style.map("Treeview", background=[("selected", c["accent"])],
+                  foreground=[("selected", "#ffffff")])
+        style.configure("Treeview.Heading", background=c["panel"], foreground=c["fg"],
+                        bordercolor=c["border"])
+        style.configure("TSpinbox", fieldbackground=c["sel"], foreground=c["fg"],
+                        background=c["panel"])
+        style.configure("Accent.TButton", background=c["accent"], foreground="#ffffff")
+        style.map("Accent.TButton",
+                  background=[("active", c["accent2"]), ("pressed", c["accent2"])])
+        self.root.configure(bg=c["panel"])
+        self.root.option_add("*TCombobox*Listbox.background", c["sel"])
+        self.root.option_add("*TCombobox*Listbox.foreground", c["fg"])
+
+    def _get_sgdb_key(self) -> str:
+        """Lee la API key de SteamGridDB (env o config local)."""
+        key = SGDB_KEY
+        if not key:
+            cfg = Path.home() / ".config" / "nps-gui" / "config.json"
+            try:
+                if cfg.exists():
+                    key = json.loads(cfg.read_text()).get("steamgriddb_api_key", "")
+            except Exception:
+                pass
+        return key.strip()
+
+    def _sgdb_request(self, path: str, timeout: int = SGDB_DEFAULT_TIMEOUT) -> Optional[dict]:
+        """GET a la API de SteamGridDB. Devuelve JSON dict o None."""
+        key = self._get_sgdb_key()
+        if not key:
+            return None
+        url = f"{SGDB_BASE}{path}"
+        req = urllib.request.Request(url, headers={
+            "Authorization": f"Bearer {key}",
+            "Accept": "application/json",
+            "User-Agent": "NPS-GUI/1.0",
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            return None
+
+    def _download_image(self, url: str, timeout: int = SGDB_DEFAULT_TIMEOUT) -> Optional[bytes]:
+        """Descarga una imagen (bytes) desde una URL."""
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "NPS-GUI/1.0"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read()
+        except Exception:
+            return None
+
+    def _guess_game_search(self) -> str:
+        """Devuelve el nombre del juego a buscar en SGDB (1er resultado o query)."""
+        if self.results:
+            return self.results[0]["name"]
+        q = self.search_var.get().strip()
+        return q
+
+    def _set_background_image_path(self, path: Path):
+        """Carga una imagen local (PNG/JPG) y la muestra de fondo del panel central."""
+        try:
+            from PIL import Image, ImageTk
+            img = Image.open(path)
+            img = img.convert("RGBA")
+            # Oscurecer para legibilidad
+            overlay = Image.new("RGBA", img.size, (0, 0, 0, 150))
+            img = Image.alpha_composite(img, overlay)
+            self.bg_image = img.copy()
+            self.bg_photo = ImageTk.PhotoImage(img)
+            self._render_background()
+        except Exception:
+            pass
+
+    def _set_background_image_bytes(self, data: bytes):
+        """Carga una imagen desde bytes y la muestra de fondo."""
+        try:
+            from PIL import Image, ImageTk
+            import io
+            img = Image.open(io.BytesIO(data))
+            img = img.convert("RGBA")
+            overlay = Image.new("RGBA", img.size, (0, 0, 0, 150))
+            img = Image.alpha_composite(img, overlay)
+            self.bg_image = img.copy()
+            self.bg_photo = ImageTk.PhotoImage(img)
+            self._render_background()
+        except Exception:
+            pass
+
+    def _render_background(self):
+        """Pinta el fondo del panel (re-escalado al size actual)."""
+        if not self.bg_image or not hasattr(self, "bg_canvas"):
+            return
+        try:
+            from PIL import ImageTk
+            w = max(self.bg_canvas.winfo_width(), 10)
+            h = max(self.bg_canvas.winfo_height(), 10)
+            img = self.bg_image.copy()
+            img.thumbnail((w, h))
+            self.bg_photo = ImageTk.PhotoImage(img)
+            self.bg_canvas.delete("all")
+            self.bg_canvas.create_image(w // 2, h // 2, image=self.bg_photo, anchor="center")
+        except Exception:
+            pass
+
+    def _show_nps_logo_background(self):
+        """Muestra el logo de NPS como fondo inicial."""
+        logo = get_resource_path("assets/nps_logo.png")
+        if logo.exists():
+            self._set_background_image_path(logo)
+        else:
+            self.log_write("ℹ Logo NPS no encontrado en assets/")
+
     def _build_ui(self):
+        # Canvas de fondo (logo NPS al inicio / imagen del juego al buscar)
+        self.bg_canvas = tk.Canvas(self.root, bg=COLORS["bg"], highlightthickness=0)
+        self.bg_canvas.place(x=0, y=0, relwidth=1, relheight=1)
+        self.root.bind("<Configure>", lambda e: self._render_background())
+
         # Top frame: search
         top = ttk.Frame(self.root, padding=10)
         top.pack(fill=tk.X)
@@ -110,7 +274,7 @@ class NPSGui:
 
         # Middle frame: results table
         mid = ttk.Frame(self.root, padding=(10, 0, 10, 10))
-        mid.pack(fill=tk.BOTH, expand=True)
+        mid.pack(fill=tk.X)
 
         columns = ("sel", "title_id", "region", "name")
         self.tree = ttk.Treeview(mid, columns=columns, show="headings", selectmode="extended")
@@ -170,8 +334,14 @@ class NPSGui:
 
         # Log output
         ttk.Label(self.root, text="Salida:", padding=(10, 0, 0, 0)).pack(anchor="w")
-        self.log = scrolledtext.ScrolledText(self.root, height=8, state="disabled")
+        self.log = scrolledtext.ScrolledText(self.root, height=8, state="disabled",
+                                              bg=COLORS["sel"], fg=COLORS["fg"],
+                                              insertbackground=COLORS["fg"],
+                                              relief=tk.FLAT, wrap="word")
         self.log.pack(fill=tk.X, padx=10, pady=(0, 10))
+
+        # Logo NPS de fondo al iniciar
+        self.root.after(50, self._show_nps_logo_background)
 
     def log_write(self, msg: str):
         self.log.configure(state="normal")
@@ -248,6 +418,42 @@ class NPSGui:
             self.root.after(0, lambda: self.log_write(f"Error: {e}"))
         finally:
             self.root.after(0, lambda: self.search_entry.config(state="normal"))
+
+        # Buscar logo del juego de fondo (SteamGridDB), en un hilo aparte
+        try:
+            threading.Thread(target=self._fetch_game_background, args=(query,), daemon=True).start()
+        except Exception:
+            pass
+
+    def _fetch_game_background(self, query: str):
+        """Busca en SGDB el logo del juego buscado y lo pone de fondo."""
+        key = self._get_sgdb_key()
+        if not key:
+            self.root.after(0, lambda: self.log_write(
+                "ℹ Sin API key de SteamGridDB (STEAMGRIDDB_API_KEY). No se muestra fondo del juego."))
+            return
+        query = (query or "").strip()
+        if not query:
+            return
+        try:
+            term = urllib.parse.quote(query)
+            data = self._sgdb_request(f"/search/autocomplete/{term}")
+            if not data or not data.get("data"):
+                return
+            game_id = data["data"][0].get("id")
+            if not game_id:
+                return
+            logos = self._sgdb_request(f"/logos/game/{game_id}?limit=1")
+            if not logos or not logos.get("data"):
+                return
+            url = logos["data"][0].get("url")
+            if not url:
+                return
+            img_bytes = self._download_image(url)
+            if img_bytes:
+                self.root.after(0, lambda: self._set_background_image_bytes(img_bytes))
+        except Exception as e:
+            self.log_write(f"⚠ No se pudo obtener logo del juego: {e}")
 
     def _parse_results(self, output: str):
         self.tree.delete(*self.tree.get_children())
