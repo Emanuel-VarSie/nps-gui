@@ -101,6 +101,7 @@ jobs:
           architecture: 'x64'
 
       - name: Download nps binary (Windows)
+        shell: bash
         run: |
           mkdir -p assets
           curl -fL -o assets/nps-windows-x64.exe "https://github.com/dreulavelle/trove/releases/download/v1.0.1/nps-windows-x64.exe"
