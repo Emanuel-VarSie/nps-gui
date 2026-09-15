@@ -222,18 +222,72 @@ class NPSGui:
             pass
 
     def _render_background(self):
-        """Pinta el fondo del panel (re-escalado al size actual)."""
-        if not self.bg_image or not hasattr(self, "bg_canvas"):
+        """Pinta el fondo del canvas raíz (re-escalado al size actual)."""
+        if not self.bg_image or not hasattr(self, "root_canvas"):
             return
         try:
             from PIL import ImageTk
-            w = max(self.bg_canvas.winfo_width(), 10)
-            h = max(self.bg_canvas.winfo_height(), 10)
+            w = max(self.root_canvas.winfo_width(), 10)
+            h = max(self.root_canvas.winfo_height(), 10)
             img = self.bg_image.copy()
             img.thumbnail((w, h))
             self.bg_photo = ImageTk.PhotoImage(img)
-            self.bg_canvas.delete("all")
-            self.bg_canvas.create_image(w // 2, h // 2, image=self.bg_photo, anchor="center")
+            self.root_canvas.delete("bg")
+            self.root_canvas.create_image(w // 2, h // 2, image=self.bg_photo, anchor="center", tags="bg")
+            self.root_canvas.tag_lower("bg")
+        except Exception:
+            pass
+
+    def _layout_windows(self):
+        """Posiciona las ventanas dentro del canvas raíz al redimensionar."""
+        if not hasattr(self, "root_canvas"):
+            return
+        try:
+            w = max(self.root_canvas.winfo_width(), 10)
+            h = max(self.root_canvas.winfo_height(), 10)
+            
+            # Ancho usable: 90% centrado (deja márgenes laterales 5% cada lado)
+            usable_w = int(w * 0.9)
+            offset_x = (w - usable_w) // 2
+            
+            # Top bar at top (fixed height, ancho usable_w)
+            if hasattr(self, "top_win"):
+                self.root_canvas.coords(self.top_win, offset_x, 0)
+                self.root_canvas.itemconfig(self.top_win, width=usable_w)
+                if hasattr(self, "top_frame") and self.top_frame.winfo_exists():
+                    top_h = self.top_frame.winfo_height()
+                else:
+                    top_h = 60
+            else:
+                top_h = 60
+            
+            # Mid canvas (tabla) below top - height adapts to content
+            if hasattr(self, "mid_win"):
+                self.root_canvas.coords(self.mid_win, offset_x, top_h)
+                tree_h = self.tree.winfo_height() if hasattr(self, "tree") and self.tree.winfo_exists() else 300
+                mid_h = max(200, min(tree_h + 40, h - top_h - 150))
+                self.root_canvas.coords(self.mid_win, offset_x, top_h)
+                self.root_canvas.itemconfig(self.mid_win, width=usable_w, height=mid_h)
+            
+            # Bottom sections stacked below mid
+            mid_h_est = 300
+            if hasattr(self, "tree") and self.tree.winfo_exists():
+                mid_h_est = max(200, self.tree.winfo_height() + 40)
+            y = top_h + mid_h_est + 20
+            
+            for attr_name in ["bot_win", "dest_win", "prog_win", "log_win"]:
+                if hasattr(self, attr_name):
+                    win_id = getattr(self, attr_name)
+                    try:
+                        widget_name = self.root_canvas.itemcget(win_id, "window")
+                        if widget_name:
+                            widget = self.root_canvas.nametowidget(widget_name)
+                            if widget.winfo_exists():
+                                self.root_canvas.coords(win_id, offset_x, y)
+                                self.root_canvas.itemconfig(win_id, width=usable_w)
+                                y += widget.winfo_height() + 5
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -264,39 +318,39 @@ class NPSGui:
             self.log_write("ℹ Logo NPS no encontrado en assets/")
 
     def _build_ui(self):
-        # Canvas de fondo (logo NPS al inicio / imagen del juego al buscar)
-        self.bg_canvas = tk.Canvas(self.root, bg=COLORS["bg"], highlightthickness=0)
-        self.bg_canvas.place(x=0, y=0, relwidth=1, relheight=1)
-        self.root.bind("<Configure>", lambda e: self._render_background())
+        # Canvas raíz: fondo de toda la ventana
+        self.root_canvas = tk.Canvas(self.root, bg=COLORS["bg"], highlightthickness=0)
+        self.root_canvas.place(x=0, y=0, relwidth=1, relheight=1)
+        self.root.bind("<Configure>", lambda e: (self._render_background(), self._layout_windows()))
 
-        # Top frame: search
-        top = ttk.Frame(self.root, padding=10)
-        top.pack(fill=tk.X)
+        # --- Top frame: search (creado como ventana en el canvas) ---
+        self.top_frame = tk.Frame(self.root_canvas, bg=COLORS["bg"], padx=10, pady=10)
+        self.top_win = self.root_canvas.create_window(0, 0, window=self.top_frame, anchor="nw")
 
-        ttk.Label(top, text="Buscar juego:").pack(side=tk.LEFT)
+        ttk.Label(self.top_frame, text="Buscar juego:").pack(side=tk.LEFT)
         self.search_var = tk.StringVar()
-        self.search_entry = ttk.Entry(top, textvariable=self.search_var, width=50)
+        self.search_entry = ttk.Entry(self.top_frame, textvariable=self.search_var, width=50)
         self.search_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
         self.search_entry.bind("<Return>", lambda e: self.on_search())
-        ttk.Button(top, text="Buscar", command=self.on_search).pack(side=tk.LEFT, padx=5)
+        ttk.Button(self.top_frame, text="Buscar", command=self.on_search).pack(side=tk.LEFT, padx=5)
 
         # Platform selector
-        platform_frame = ttk.Frame(top)
-        platform_frame.pack(side=tk.LEFT, padx=10)
-        ttk.Label(platform_frame, text="Plataforma:").pack(side=tk.LEFT)
+        self.platform_frame = tk.Frame(self.top_frame, bg=COLORS["bg"])
+        self.platform_frame.pack(side=tk.LEFT, padx=10)
+        ttk.Label(self.platform_frame, text="Plataforma:").pack(side=tk.LEFT)
         self.platform_var = tk.StringVar(value="PS3")
-        platform_combo = ttk.Combobox(
-            platform_frame, textvariable=self.platform_var, width=8,
+        self.platform_combo = ttk.Combobox(
+            self.platform_frame, textvariable=self.platform_var, width=8,
             values=["PS3", "PSV", "PSP", "PSX", "PSM"], state="readonly"
         )
-        platform_combo.pack(side=tk.LEFT, padx=5)
+        self.platform_combo.pack(side=tk.LEFT, padx=5)
 
-        # Middle frame: results table with background canvas
-        self.mid_canvas = tk.Canvas(self.root, bg=COLORS["bg"], highlightthickness=0)
-        self.mid_canvas.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        # --- Middle: results table con su propio canvas de fondo ---
+        self.mid_canvas = tk.Canvas(self.root_canvas, bg=COLORS["bg"], highlightthickness=0)
+        self.mid_win = self.root_canvas.create_window(0, 0, window=self.mid_canvas, anchor="nw")
 
-        # Frame inside canvas to hold treeview + scrollbars
-        mid = ttk.Frame(self.mid_canvas, padding=(0, 0, 0, 0))
+        # Frame inside mid_canvas para treeview + scrollbars
+        mid = tk.Frame(self.mid_canvas, bg=COLORS["bg"])
         self.mid_window = self.mid_canvas.create_window(0, 0, window=mid, anchor="nw")
 
         columns = ("sel", "title_id", "region", "name")
@@ -321,50 +375,52 @@ class NPSGui:
         mid.grid_rowconfigure(0, weight=1)
         mid.grid_columnconfigure(0, weight=1)
 
-        # Make canvas background follow resizing
-        def _on_canvas_resize(event):
+        def _on_mid_resize(event):
             self.mid_canvas.itemconfig(self.mid_window, width=event.width)
             self._render_mid_background()
-        self.mid_canvas.bind("<Configure>", _on_canvas_resize)
+        self.mid_canvas.bind("<Configure>", _on_mid_resize)
 
         self.tree.bind("<Button-1>", self.on_tree_click)
         self.tree.bind("<Double-1>", self.on_tree_double_click)
 
-        # Bottom frame: buttons, destination, progress, log
-        bot = ttk.Frame(self.root, padding=10)
-        bot.pack(fill=tk.X)
+        # --- Bottom frame: buttons, destination, progress, log ---
+        self.bot_frame = tk.Frame(self.root_canvas, bg=COLORS["bg"], padx=10, pady=10)
+        self.bot_win = self.root_canvas.create_window(0, 0, window=self.bot_frame, anchor="nw")
 
-        ttk.Button(bot, text="Descargar seleccionados", command=self.on_download).pack(side=tk.LEFT, padx=5)
-        self.cancel_btn = ttk.Button(bot, text="Cancelar descarga", command=self.on_cancel, state="disabled")
+        ttk.Button(self.bot_frame, text="Descargar seleccionados", command=self.on_download).pack(side=tk.LEFT, padx=5)
+        self.cancel_btn = ttk.Button(self.bot_frame, text="Cancelar descarga", command=self.on_cancel, state="disabled")
         self.cancel_btn.pack(side=tk.LEFT, padx=5)
-        ttk.Button(bot, text="Limpiar selección", command=self.clear_selection).pack(side=tk.LEFT, padx=5)
-        ttk.Button(bot, text="Abrir carpeta destino", command=self.open_dest_folder).pack(side=tk.LEFT, padx=5)
+        ttk.Button(self.bot_frame, text="Limpiar selección", command=self.clear_selection).pack(side=tk.LEFT, padx=5)
+        ttk.Button(self.bot_frame, text="Abrir carpeta destino", command=self.open_dest_folder).pack(side=tk.LEFT, padx=5)
 
         # Destination folder
-        dest_frame = ttk.Frame(self.root, padding=(10, 0, 10, 5))
-        dest_frame.pack(fill=tk.X)
-        ttk.Label(dest_frame, text="Destino:").pack(side=tk.LEFT)
+                # Destination folder
+        self.dest_frame = tk.Frame(self.root_canvas, bg=COLORS["bg"], padx=10, pady=5)
+        self.dest_win = self.root_canvas.create_window(0, 0, window=self.dest_frame, anchor="nw")
+        ttk.Label(self.dest_frame, text="Destino:").pack(side=tk.LEFT)
         self.dest_var = tk.StringVar(value=DEFAULT_DEST)
-        self.dest_entry = ttk.Entry(dest_frame, textvariable=self.dest_var, width=60)
+        self.dest_entry = ttk.Entry(self.dest_frame, textvariable=self.dest_var, width=60)
         self.dest_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-        ttk.Button(dest_frame, text="Examinar", command=self.choose_dest_folder).pack(side=tk.LEFT, padx=5)
+        ttk.Button(self.dest_frame, text="Examinar", command=self.choose_dest_folder).pack(side=tk.LEFT, padx=5)
 
         # Progress bar with phase indicator
-        prog_frame = ttk.Frame(self.root, padding=(10, 0, 10, 5))
-        prog_frame.pack(fill=tk.X)
-        ttk.Label(prog_frame, text="Progreso:").pack(side=tk.LEFT)
+        self.prog_frame = tk.Frame(self.root_canvas, bg=COLORS["bg"], padx=10, pady=5)
+        self.prog_win = self.root_canvas.create_window(0, 0, window=self.prog_frame, anchor="nw")
+        ttk.Label(self.prog_frame, text="Progreso:").pack(side=tk.LEFT)
         self.progress_var = tk.DoubleVar(value=0)
-        self.progress_bar = ttk.Progressbar(prog_frame, variable=self.progress_var, maximum=100, mode="determinate")
+        self.progress_bar = ttk.Progressbar(self.prog_frame, variable=self.progress_var, maximum=100, mode="determinate")
         self.progress_bar.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-        self.progress_label = ttk.Label(prog_frame, text="Esperando...")
+        self.progress_label = ttk.Label(self.prog_frame, text="Esperando...")
         self.progress_label.pack(side=tk.LEFT, padx=5)
-        self.phase_indicator = tk.Canvas(prog_frame, width=20, height=20, highlightthickness=0)
+        self.phase_indicator = tk.Canvas(self.prog_frame, width=20, height=20, highlightthickness=0)
         self.phase_indicator.pack(side=tk.LEFT, padx=5)
         self.phase_circle = self.phase_indicator.create_oval(2, 2, 18, 18, fill="gray", outline="")
 
         # Log output
-        ttk.Label(self.root, text="Salida:", padding=(10, 0, 0, 0)).pack(anchor="w")
-        self.log = scrolledtext.ScrolledText(self.root, height=8, state="disabled",
+        self.log_frame = tk.Frame(self.root_canvas, bg=COLORS["bg"], padx=10, pady=5)
+        self.log_win = self.root_canvas.create_window(0, 0, window=self.log_frame, anchor="nw")
+        ttk.Label(self.log_frame, text="Salida:", padding=(10, 0, 0, 0)).pack(anchor="w")
+        self.log = scrolledtext.ScrolledText(self.log_frame, height=8, state="disabled",
                                               bg=COLORS["sel"], fg=COLORS["fg"],
                                               insertbackground=COLORS["fg"],
                                               relief=tk.FLAT, wrap="word")
@@ -372,6 +428,9 @@ class NPSGui:
 
         # Logo NPS de fondo al iniciar
         self.root.after(50, self._show_nps_logo_background)
+        # Forzar layout inicial
+        self.root.update_idletasks()
+        self._layout_windows()
 
     def log_write(self, msg: str):
         self.log.configure(state="normal")
