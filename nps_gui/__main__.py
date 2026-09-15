@@ -190,21 +190,6 @@ class NPSGui:
         q = self.search_var.get().strip()
         return q
 
-    def _set_background_image_path(self, path: Path):
-        """Carga una imagen local (PNG/JPG) y la muestra de fondo del panel central."""
-        try:
-            from PIL import Image, ImageTk
-            img = Image.open(path)
-            img = img.convert("RGBA")
-            # Oscurecer para legibilidad
-            overlay = Image.new("RGBA", img.size, (0, 0, 0, 150))
-            img = Image.alpha_composite(img, overlay)
-            self.bg_image = img.copy()
-            self.bg_photo = ImageTk.PhotoImage(img)
-            self._render_background()
-        except Exception:
-            pass
-
     def _set_background_image_bytes(self, data: bytes):
         """Carga una imagen desde bytes y la muestra de fondo."""
         try:
@@ -217,6 +202,22 @@ class NPSGui:
             self.bg_image = img.copy()
             self.bg_photo = ImageTk.PhotoImage(img)
             self._render_background()
+            self._render_mid_background()
+        except Exception:
+            pass
+
+    def _set_background_image_path(self, path: Path):
+        """Carga una imagen local (PNG/JPG) y la muestra de fondo del panel central."""
+        try:
+            from PIL import Image, ImageTk
+            img = Image.open(path)
+            img = img.convert("RGBA")
+            overlay = Image.new("RGBA", img.size, (0, 0, 0, 150))
+            img = Image.alpha_composite(img, overlay)
+            self.bg_image = img.copy()
+            self.bg_photo = ImageTk.PhotoImage(img)
+            self._render_background()
+            self._render_mid_background()
         except Exception:
             pass
 
@@ -233,6 +234,24 @@ class NPSGui:
             self.bg_photo = ImageTk.PhotoImage(img)
             self.bg_canvas.delete("all")
             self.bg_canvas.create_image(w // 2, h // 2, image=self.bg_photo, anchor="center")
+        except Exception:
+            pass
+
+    def _render_mid_background(self):
+        """Pinta el fondo del panel central (mid_canvas)."""
+        if not self.bg_image or not hasattr(self, "mid_canvas"):
+            return
+        try:
+            from PIL import ImageTk
+            w = max(self.mid_canvas.winfo_width(), 10)
+            h = max(self.mid_canvas.winfo_height(), 10)
+            img = self.bg_image.copy()
+            img.thumbnail((w, h))
+            self.mid_bg_photo = ImageTk.PhotoImage(img)
+            self.mid_canvas.delete("bg")
+            self.mid_canvas.create_image(w // 2, h // 2, image=self.mid_bg_photo, anchor="center", tags="bg")
+            # Lower the background image behind the window
+            self.mid_canvas.tag_lower("bg")
         except Exception:
             pass
 
@@ -272,9 +291,13 @@ class NPSGui:
         )
         platform_combo.pack(side=tk.LEFT, padx=5)
 
-        # Middle frame: results table
-        mid = ttk.Frame(self.root, padding=(10, 0, 10, 10))
-        mid.pack(fill=tk.X)
+        # Middle frame: results table with background canvas
+        self.mid_canvas = tk.Canvas(self.root, bg=COLORS["bg"], highlightthickness=0)
+        self.mid_canvas.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+
+        # Frame inside canvas to hold treeview + scrollbars
+        mid = ttk.Frame(self.mid_canvas, padding=(0, 0, 0, 0))
+        self.mid_window = self.mid_canvas.create_window(0, 0, window=mid, anchor="nw")
 
         columns = ("sel", "title_id", "region", "name")
         self.tree = ttk.Treeview(mid, columns=columns, show="headings", selectmode="extended")
@@ -294,8 +317,15 @@ class NPSGui:
         self.tree.grid(row=0, column=0, sticky="nsew")
         vsb.grid(row=0, column=1, sticky="ns")
         hsb.grid(row=1, column=0, sticky="ew")
+
         mid.grid_rowconfigure(0, weight=1)
         mid.grid_columnconfigure(0, weight=1)
+
+        # Make canvas background follow resizing
+        def _on_canvas_resize(event):
+            self.mid_canvas.itemconfig(self.mid_window, width=event.width)
+            self._render_mid_background()
+        self.mid_canvas.bind("<Configure>", _on_canvas_resize)
 
         self.tree.bind("<Button-1>", self.on_tree_click)
         self.tree.bind("<Double-1>", self.on_tree_double_click)
