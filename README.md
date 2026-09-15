@@ -25,7 +25,11 @@ A cross-platform GUI wrapper around [dreulavelle/trove](https://github.com/dreul
 
 ## Screenshots
 
-*Coming soon*
+![Interfaz principal](screenshots/screenshot-main.png)
+
+![Results after a search](screenshots/screenshot-search.png)
+
+![Batch download in progress](screenshots/screenshot-download.png)
 
 ---
 
