@@ -15,9 +15,6 @@ import signal
 import glob
 import sys
 import platform
-import json
-import urllib.request
-import urllib.parse
 from pathlib import Path
 from typing import List, Dict, Optional
 
@@ -67,23 +64,6 @@ def get_nps_binary() -> Path:
 NPS_BIN = get_nps_binary()
 DEFAULT_DEST = str(Path.home() / "Downloads" / "PS3_Games")
 
-# --- Tema oscuro ---
-COLORS = {
-    "bg": "#121212",
-    "panel": "#1e1e1e",
-    "fg": "#e0e0e0",
-    "muted": "#9e9e9e",
-    "accent": "#3574f0",
-    "accent2": "#2b5fcf",
-    "sel": "#252525",
-    "border": "#333333",
-}
-
-# --- SteamGridDB (fondo del juego al buscar) ---
-SGDB_BASE = "https://www.steamgriddb.com/api/v2"
-SGDB_KEY = os.environ.get("STEAMGRIDDB_API_KEY", "")
-SGDB_DEFAULT_TIMEOUT = 15
-
 
 class NPSGui:
     """Main GUI application class."""
@@ -101,257 +81,36 @@ class NPSGui:
         self.current_title_id: Optional[str] = None
         self.current_dest: Optional[str] = None
         self.child_pids = set()
-        self.bg_image = None          # PIL image actual de fondo
-        self.bg_photo = None          # PhotoImage para tk
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
-        self._apply_dark_theme()
         self._build_ui()
 
-    def _apply_dark_theme(self):
-        """Aplica el tema oscuro global."""
-        c = COLORS
-        style = ttk.Style(self.root)
-        available = set(style.theme_names())
-        if "clam" in available:
-            style.theme_use("clam")
-        style.configure(".", background=c["panel"], foreground=c["fg"],
-                        fieldbackground=c["panel"], bordercolor=c["border"])
-        style.configure("TFrame", background=c["panel"])
-        style.configure("TLabel", background=c["panel"], foreground=c["fg"])
-        style.configure("TButton", background=c["accent"], foreground="#ffffff",
-                        padding=6, borderwidth=0, focuscolor=c["accent"])
-        style.map("TButton",
-                  background=[("active", c["accent2"]), ("pressed", c["accent2"])],
-                  foreground=[("active", "#ffffff")])
-        style.configure("TEntry", fieldbackground=c["sel"], foreground=c["fg"],
-                        insertcolor=c["fg"], bordercolor=c["border"])
-        style.configure("TCombobox", fieldbackground=c["sel"], foreground=c["fg"],
-                        background=c["panel"], arrowcolor=c["fg"])
-        style.configure("TProgressbar", background=c["accent"], troughcolor=c["sel"],
-                        bordercolor=c["border"])
-        style.configure("Treeview", background=c["sel"], fieldbackground=c["sel"],
-                        foreground=c["fg"], bordercolor=c["border"])
-        style.map("Treeview", background=[("selected", c["accent"])],
-                  foreground=[("selected", "#ffffff")])
-        style.configure("Treeview.Heading", background=c["panel"], foreground=c["fg"],
-                        bordercolor=c["border"])
-        style.configure("TSpinbox", fieldbackground=c["sel"], foreground=c["fg"],
-                        background=c["panel"])
-        style.configure("Accent.TButton", background=c["accent"], foreground="#ffffff")
-        style.map("Accent.TButton",
-                  background=[("active", c["accent2"]), ("pressed", c["accent2"])])
-        self.root.configure(bg=c["panel"])
-        self.root.option_add("*TCombobox*Listbox.background", c["sel"])
-        self.root.option_add("*TCombobox*Listbox.foreground", c["fg"])
-
-    def _get_sgdb_key(self) -> str:
-        """Lee la API key de SteamGridDB (env o config local)."""
-        key = SGDB_KEY
-        if not key:
-            cfg = Path.home() / ".config" / "nps-gui" / "config.json"
-            try:
-                if cfg.exists():
-                    key = json.loads(cfg.read_text()).get("steamgriddb_api_key", "")
-            except Exception:
-                pass
-        return key.strip()
-
-    def _sgdb_request(self, path: str, timeout: int = SGDB_DEFAULT_TIMEOUT) -> Optional[dict]:
-        """GET a la API de SteamGridDB. Devuelve JSON dict o None."""
-        key = self._get_sgdb_key()
-        if not key:
-            return None
-        url = f"{SGDB_BASE}{path}"
-        req = urllib.request.Request(url, headers={
-            "Authorization": f"Bearer {key}",
-            "Accept": "application/json",
-            "User-Agent": "NPS-GUI/1.0",
-        })
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except Exception:
-            return None
-
-    def _download_image(self, url: str, timeout: int = SGDB_DEFAULT_TIMEOUT) -> Optional[bytes]:
-        """Descarga una imagen (bytes) desde una URL."""
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "NPS-GUI/1.0"})
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return resp.read()
-        except Exception:
-            return None
-
-    def _guess_game_search(self) -> str:
-        """Devuelve el nombre del juego a buscar en SGDB (1er resultado o query)."""
-        if self.results:
-            return self.results[0]["name"]
-        q = self.search_var.get().strip()
-        return q
-
-    def _set_background_image_bytes(self, data: bytes):
-        """Carga una imagen desde bytes y la muestra de fondo."""
-        try:
-            from PIL import Image, ImageTk
-            import io
-            img = Image.open(io.BytesIO(data))
-            img = img.convert("RGBA")
-            overlay = Image.new("RGBA", img.size, (0, 0, 0, 150))
-            img = Image.alpha_composite(img, overlay)
-            self.bg_image = img.copy()
-            self.bg_photo = ImageTk.PhotoImage(img)
-            self._render_background()
-            self._render_mid_background()
-        except Exception:
-            pass
-
-    def _set_background_image_path(self, path: Path):
-        """Carga una imagen local (PNG/JPG) y la muestra de fondo del panel central."""
-        try:
-            from PIL import Image, ImageTk
-            img = Image.open(path)
-            img = img.convert("RGBA")
-            overlay = Image.new("RGBA", img.size, (0, 0, 0, 150))
-            img = Image.alpha_composite(img, overlay)
-            self.bg_image = img.copy()
-            self.bg_photo = ImageTk.PhotoImage(img)
-            self._render_background()
-            self._render_mid_background()
-        except Exception:
-            pass
-
-    def _render_background(self):
-        """Pinta el fondo del canvas raíz (re-escalado al size actual)."""
-        if not self.bg_image or not hasattr(self, "root_canvas"):
-            return
-        try:
-            from PIL import ImageTk
-            w = max(self.root_canvas.winfo_width(), 10)
-            h = max(self.root_canvas.winfo_height(), 10)
-            img = self.bg_image.copy()
-            img.thumbnail((w, h))
-            self.bg_photo = ImageTk.PhotoImage(img)
-            self.root_canvas.delete("bg")
-            self.root_canvas.create_image(w // 2, h // 2, image=self.bg_photo, anchor="center", tags="bg")
-            self.root_canvas.tag_lower("bg")
-        except Exception:
-            pass
-
-    def _layout_windows(self):
-        """Posiciona las ventanas dentro del canvas raíz al redimensionar."""
-        if not hasattr(self, "root_canvas"):
-            return
-        try:
-            w = max(self.root_canvas.winfo_width(), 10)
-            h = max(self.root_canvas.winfo_height(), 10)
-            
-            # Ancho usable: 90% centrado (deja márgenes laterales 5% cada lado)
-            usable_w = int(w * 0.9)
-            offset_x = (w - usable_w) // 2
-            
-            # Top bar at top (fixed height, ancho usable_w)
-            if hasattr(self, "top_win"):
-                self.root_canvas.coords(self.top_win, offset_x, 0)
-                self.root_canvas.itemconfig(self.top_win, width=usable_w)
-                if hasattr(self, "top_frame") and self.top_frame.winfo_exists():
-                    top_h = self.top_frame.winfo_height()
-                else:
-                    top_h = 60
-            else:
-                top_h = 60
-            
-            # Mid canvas (tabla) below top - height adapts to content
-            if hasattr(self, "mid_win"):
-                self.root_canvas.coords(self.mid_win, offset_x, top_h)
-                tree_h = self.tree.winfo_height() if hasattr(self, "tree") and self.tree.winfo_exists() else 300
-                mid_h = max(200, min(tree_h + 40, h - top_h - 150))
-                self.root_canvas.coords(self.mid_win, offset_x, top_h)
-                self.root_canvas.itemconfig(self.mid_win, width=usable_w, height=mid_h)
-            
-            # Bottom sections stacked below mid
-            mid_h_est = 300
-            if hasattr(self, "tree") and self.tree.winfo_exists():
-                mid_h_est = max(200, self.tree.winfo_height() + 40)
-            y = top_h + mid_h_est + 20
-            
-            for attr_name in ["bot_win", "dest_win", "prog_win", "log_win"]:
-                if hasattr(self, attr_name):
-                    win_id = getattr(self, attr_name)
-                    try:
-                        widget_name = self.root_canvas.itemcget(win_id, "window")
-                        if widget_name:
-                            widget = self.root_canvas.nametowidget(widget_name)
-                            if widget.winfo_exists():
-                                self.root_canvas.coords(win_id, offset_x, y)
-                                self.root_canvas.itemconfig(win_id, width=usable_w)
-                                y += widget.winfo_height() + 5
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-
-    def _render_mid_background(self):
-        """Pinta el fondo del panel central (mid_canvas)."""
-        if not self.bg_image or not hasattr(self, "mid_canvas"):
-            return
-        try:
-            from PIL import ImageTk
-            w = max(self.mid_canvas.winfo_width(), 10)
-            h = max(self.mid_canvas.winfo_height(), 10)
-            img = self.bg_image.copy()
-            img.thumbnail((w, h))
-            self.mid_bg_photo = ImageTk.PhotoImage(img)
-            self.mid_canvas.delete("bg")
-            self.mid_canvas.create_image(w // 2, h // 2, image=self.mid_bg_photo, anchor="center", tags="bg")
-            # Lower the background image behind the window
-            self.mid_canvas.tag_lower("bg")
-        except Exception:
-            pass
-
-    def _show_nps_logo_background(self):
-        """Muestra el logo de NPS como fondo inicial."""
-        logo = get_resource_path("assets/nps_logo.png")
-        if logo.exists():
-            self._set_background_image_path(logo)
-        else:
-            self.log_write("ℹ Logo NPS no encontrado en assets/")
-
     def _build_ui(self):
-        # Canvas raíz: fondo de toda la ventana
-        self.root_canvas = tk.Canvas(self.root, bg=COLORS["bg"], highlightthickness=0)
-        self.root_canvas.place(x=0, y=0, relwidth=1, relheight=1)
-        self.root.bind("<Configure>", lambda e: (self._render_background(), self._layout_windows()))
+        # Top frame: search
+        top = ttk.Frame(self.root, padding=10)
+        top.pack(fill=tk.X)
 
-        # --- Top frame: search (creado como ventana en el canvas) ---
-        self.top_frame = tk.Frame(self.root_canvas, bg=COLORS["bg"], padx=10, pady=10)
-        self.top_win = self.root_canvas.create_window(0, 0, window=self.top_frame, anchor="nw")
-
-        ttk.Label(self.top_frame, text="Buscar juego:").pack(side=tk.LEFT)
+        ttk.Label(top, text="Buscar juego:").pack(side=tk.LEFT)
         self.search_var = tk.StringVar()
-        self.search_entry = ttk.Entry(self.top_frame, textvariable=self.search_var, width=50)
+        self.search_entry = ttk.Entry(top, textvariable=self.search_var, width=50)
         self.search_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
         self.search_entry.bind("<Return>", lambda e: self.on_search())
-        ttk.Button(self.top_frame, text="Buscar", command=self.on_search).pack(side=tk.LEFT, padx=5)
+        ttk.Button(top, text="Buscar", command=self.on_search).pack(side=tk.LEFT, padx=5)
 
         # Platform selector
-        self.platform_frame = tk.Frame(self.top_frame, bg=COLORS["bg"])
-        self.platform_frame.pack(side=tk.LEFT, padx=10)
-        ttk.Label(self.platform_frame, text="Plataforma:").pack(side=tk.LEFT)
+        platform_frame = ttk.Frame(top)
+        platform_frame.pack(side=tk.LEFT, padx=10)
+        ttk.Label(platform_frame, text="Plataforma:").pack(side=tk.LEFT)
         self.platform_var = tk.StringVar(value="PS3")
-        self.platform_combo = ttk.Combobox(
-            self.platform_frame, textvariable=self.platform_var, width=8,
+        platform_combo = ttk.Combobox(
+            platform_frame, textvariable=self.platform_var, width=8,
             values=["PS3", "PSV", "PSP", "PSX", "PSM"], state="readonly"
         )
-        self.platform_combo.pack(side=tk.LEFT, padx=5)
+        platform_combo.pack(side=tk.LEFT, padx=5)
 
-        # --- Middle: results table con su propio canvas de fondo ---
-        self.mid_canvas = tk.Canvas(self.root_canvas, bg=COLORS["bg"], highlightthickness=0)
-        self.mid_win = self.root_canvas.create_window(0, 0, window=self.mid_canvas, anchor="nw")
-
-        # Frame inside mid_canvas para treeview + scrollbars
-        mid = tk.Frame(self.mid_canvas, bg=COLORS["bg"])
-        self.mid_window = self.mid_canvas.create_window(0, 0, window=mid, anchor="nw")
+        # Middle frame: results table
+        mid = ttk.Frame(self.root, padding=(10, 0, 10, 10))
+        mid.pack(fill=tk.BOTH, expand=True)
 
         columns = ("sel", "title_id", "region", "name")
         self.tree = ttk.Treeview(mid, columns=columns, show="headings", selectmode="extended")
@@ -371,66 +130,48 @@ class NPSGui:
         self.tree.grid(row=0, column=0, sticky="nsew")
         vsb.grid(row=0, column=1, sticky="ns")
         hsb.grid(row=1, column=0, sticky="ew")
-
         mid.grid_rowconfigure(0, weight=1)
         mid.grid_columnconfigure(0, weight=1)
-
-        def _on_mid_resize(event):
-            self.mid_canvas.itemconfig(self.mid_window, width=event.width)
-            self._render_mid_background()
-        self.mid_canvas.bind("<Configure>", _on_mid_resize)
 
         self.tree.bind("<Button-1>", self.on_tree_click)
         self.tree.bind("<Double-1>", self.on_tree_double_click)
 
-        # --- Bottom frame: buttons, destination, progress, log ---
-        self.bot_frame = tk.Frame(self.root_canvas, bg=COLORS["bg"], padx=10, pady=10)
-        self.bot_win = self.root_canvas.create_window(0, 0, window=self.bot_frame, anchor="nw")
+        # Bottom frame: buttons, destination, progress, log
+        bot = ttk.Frame(self.root, padding=10)
+        bot.pack(fill=tk.X)
 
-        ttk.Button(self.bot_frame, text="Descargar seleccionados", command=self.on_download).pack(side=tk.LEFT, padx=5)
-        self.cancel_btn = ttk.Button(self.bot_frame, text="Cancelar descarga", command=self.on_cancel, state="disabled")
+        ttk.Button(bot, text="Descargar seleccionados", command=self.on_download).pack(side=tk.LEFT, padx=5)
+        self.cancel_btn = ttk.Button(bot, text="Cancelar descarga", command=self.on_cancel, state="disabled")
         self.cancel_btn.pack(side=tk.LEFT, padx=5)
-        ttk.Button(self.bot_frame, text="Limpiar selección", command=self.clear_selection).pack(side=tk.LEFT, padx=5)
-        ttk.Button(self.bot_frame, text="Abrir carpeta destino", command=self.open_dest_folder).pack(side=tk.LEFT, padx=5)
+        ttk.Button(bot, text="Limpiar selección", command=self.clear_selection).pack(side=tk.LEFT, padx=5)
+        ttk.Button(bot, text="Abrir carpeta destino", command=self.open_dest_folder).pack(side=tk.LEFT, padx=5)
 
         # Destination folder
-                # Destination folder
-        self.dest_frame = tk.Frame(self.root_canvas, bg=COLORS["bg"], padx=10, pady=5)
-        self.dest_win = self.root_canvas.create_window(0, 0, window=self.dest_frame, anchor="nw")
-        ttk.Label(self.dest_frame, text="Destino:").pack(side=tk.LEFT)
+        dest_frame = ttk.Frame(self.root, padding=(10, 0, 10, 5))
+        dest_frame.pack(fill=tk.X)
+        ttk.Label(dest_frame, text="Destino:").pack(side=tk.LEFT)
         self.dest_var = tk.StringVar(value=DEFAULT_DEST)
-        self.dest_entry = ttk.Entry(self.dest_frame, textvariable=self.dest_var, width=60)
+        self.dest_entry = ttk.Entry(dest_frame, textvariable=self.dest_var, width=60)
         self.dest_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-        ttk.Button(self.dest_frame, text="Examinar", command=self.choose_dest_folder).pack(side=tk.LEFT, padx=5)
+        ttk.Button(dest_frame, text="Examinar", command=self.choose_dest_folder).pack(side=tk.LEFT, padx=5)
 
         # Progress bar with phase indicator
-        self.prog_frame = tk.Frame(self.root_canvas, bg=COLORS["bg"], padx=10, pady=5)
-        self.prog_win = self.root_canvas.create_window(0, 0, window=self.prog_frame, anchor="nw")
-        ttk.Label(self.prog_frame, text="Progreso:").pack(side=tk.LEFT)
+        prog_frame = ttk.Frame(self.root, padding=(10, 0, 10, 5))
+        prog_frame.pack(fill=tk.X)
+        ttk.Label(prog_frame, text="Progreso:").pack(side=tk.LEFT)
         self.progress_var = tk.DoubleVar(value=0)
-        self.progress_bar = ttk.Progressbar(self.prog_frame, variable=self.progress_var, maximum=100, mode="determinate")
+        self.progress_bar = ttk.Progressbar(prog_frame, variable=self.progress_var, maximum=100, mode="determinate")
         self.progress_bar.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-        self.progress_label = ttk.Label(self.prog_frame, text="Esperando...")
+        self.progress_label = ttk.Label(prog_frame, text="Esperando...")
         self.progress_label.pack(side=tk.LEFT, padx=5)
-        self.phase_indicator = tk.Canvas(self.prog_frame, width=20, height=20, highlightthickness=0)
+        self.phase_indicator = tk.Canvas(prog_frame, width=20, height=20, highlightthickness=0)
         self.phase_indicator.pack(side=tk.LEFT, padx=5)
         self.phase_circle = self.phase_indicator.create_oval(2, 2, 18, 18, fill="gray", outline="")
 
         # Log output
-        self.log_frame = tk.Frame(self.root_canvas, bg=COLORS["bg"], padx=10, pady=5)
-        self.log_win = self.root_canvas.create_window(0, 0, window=self.log_frame, anchor="nw")
-        ttk.Label(self.log_frame, text="Salida:", padding=(10, 0, 0, 0)).pack(anchor="w")
-        self.log = scrolledtext.ScrolledText(self.log_frame, height=8, state="disabled",
-                                              bg=COLORS["sel"], fg=COLORS["fg"],
-                                              insertbackground=COLORS["fg"],
-                                              relief=tk.FLAT, wrap="word")
+        ttk.Label(self.root, text="Salida:", padding=(10, 0, 0, 0)).pack(anchor="w")
+        self.log = scrolledtext.ScrolledText(self.root, height=8, state="disabled")
         self.log.pack(fill=tk.X, padx=10, pady=(0, 10))
-
-        # Logo NPS de fondo al iniciar
-        self.root.after(50, self._show_nps_logo_background)
-        # Forzar layout inicial
-        self.root.update_idletasks()
-        self._layout_windows()
 
     def log_write(self, msg: str):
         self.log.configure(state="normal")
@@ -507,42 +248,6 @@ class NPSGui:
             self.root.after(0, lambda: self.log_write(f"Error: {e}"))
         finally:
             self.root.after(0, lambda: self.search_entry.config(state="normal"))
-
-        # Buscar logo del juego de fondo (SteamGridDB), en un hilo aparte
-        try:
-            threading.Thread(target=self._fetch_game_background, args=(query,), daemon=True).start()
-        except Exception:
-            pass
-
-    def _fetch_game_background(self, query: str):
-        """Busca en SGDB el logo del juego buscado y lo pone de fondo."""
-        key = self._get_sgdb_key()
-        if not key:
-            self.root.after(0, lambda: self.log_write(
-                "ℹ Sin API key de SteamGridDB (STEAMGRIDDB_API_KEY). No se muestra fondo del juego."))
-            return
-        query = (query or "").strip()
-        if not query:
-            return
-        try:
-            term = urllib.parse.quote(query)
-            data = self._sgdb_request(f"/search/autocomplete/{term}")
-            if not data or not data.get("data"):
-                return
-            game_id = data["data"][0].get("id")
-            if not game_id:
-                return
-            logos = self._sgdb_request(f"/logos/game/{game_id}?limit=1")
-            if not logos or not logos.get("data"):
-                return
-            url = logos["data"][0].get("url")
-            if not url:
-                return
-            img_bytes = self._download_image(url)
-            if img_bytes:
-                self.root.after(0, lambda: self._set_background_image_bytes(img_bytes))
-        except Exception as e:
-            self.log_write(f"⚠ No se pudo obtener logo del juego: {e}")
 
     def _parse_results(self, output: str):
         self.tree.delete(*self.tree.get_children())
